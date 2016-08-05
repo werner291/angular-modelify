@@ -1,0 +1,22 @@
+{
+  "name": "angular-restmodel",
+  "description": "A data-modeling library for Angular meant to make interaction with a REST api easy while using a full client-side relational model.",
+  "main": "datamodel.js",
+  "keywords": [
+    "angular",
+    "rest",
+    "model"
+  ],
+  "authors": [
+    "Werner Kroneman"
+  ],
+  "license": "MIT",
+  "homepage": "",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ]
+}
