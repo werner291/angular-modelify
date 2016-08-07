@@ -13,13 +13,29 @@ angular.module('datamodel').factory('Model', function($http,$q) {
     var CommonApi = {
 
         /**
-         * A helper function that executes an $http call.
-         *
-         * On POST or PUT calls, it automatically includes
-         * information about the collection or the instance and,
-         * on success, updates the instance or collection with
-         * data received from the server.
-         */
+        * A helper function that executes an $http call.
+        *
+        * On POST or PUT calls, it automatically includes
+        * information about the collection or the instance and,
+        * on success, updates the instance or collection with
+        * data received from the server.
+        *
+        * $pending will be set to true for the duration of the action.
+        *
+        * @param config An almost-normal $http config object that is copied
+        *               and passed almost directy to $http. (see below)
+        *
+        * The config object is the same as the $http config object, with the
+        * following exceptions:
+        *
+        * - config.url will be prefixed with the urlPrefix of the model
+        *   and suffixed with a slash if there isn't any and appendTrailingSlash
+        *   is enabled on the model. Use config.absoluteUrl to use that url directly.
+        *
+        *   If absent, a url will be generated from the object this method is called on.
+        *
+        * @returns promise
+        */
         $restAction: function(config) {
 
             // Take copy to prevent modifying the original object in case
@@ -64,6 +80,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
                     this.$loaded = true;
                     thisResource.$decodeAndPopulate(response.data);
                 }
+                return thisResource;
             }, function(errors) {
                 // Non-success.
                 throw "Problems: " + errors;
@@ -71,7 +88,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         },
 
         $load: function() {
-            this.$restAction({
+            return this.$restAction({
                 method: 'GET'
             });
         },
@@ -80,7 +97,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
             if (! this.$loaded) {
                 return this.$load();
             } else {
-                return $q.then(this);
+                return $q.when(this);
             }
         },
 
@@ -133,12 +150,20 @@ angular.module('datamodel').factory('Model', function($http,$q) {
 
         if (this.$encodedAsPks) {
             for (pk in data) {
-                this.push(type.$getInstance(pk));
+                this.push(type.getInstanceByPk(pk));
             }
         } else {
-            for (entData in data) {
-                var instance = new this.type();
-                instance.$decodeAndPopulate(data[entData]);
+            for (const entData of data) {
+
+                var instance;
+
+                if (typeof entData[this.type.pkField] !== 'undefined') {
+                    instance = this.type.getInstanceByPk(entData[this.type.pkField]);
+                } else {
+                    instance = new this.type();
+                }
+
+                instance.$decodeAndPopulate(entData);
                 this.push(instance);
             }
         }
@@ -148,25 +173,39 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         this.length = 0;
     }
 
-    function BaseEntity(config) {
-        this.instances = {};
-        this.url = config.url || '';
-        this.fields = config.fields || {};
-    }
+    function BaseEntity(config) { }
 
-    angular.extend(Collection.prototype, CommonApi);
+    angular.extend(BaseEntity.prototype, CommonApi);
+
+    Object.defineProperty(BaseEntity.prototype, "$pk", {
+        get: function() { return this.$_pkValue; },
+        set: function(newValue) {
+            if (this.$_pkValue == newValue) {
+                return;
+            }
+
+            if (this.$_pkValue && this.instances[$_pkValue]) {
+                delete this.instances[$_pkValue];
+            }
+
+            if (this.instances[newValue]) {
+                throw 'An instance with primary key ' + newValue +
+                ' already exists. Primary keys must be unique.';
+                this.instances[newValue] = this;
+            }
+            this.$_pkValue = newValue;
+        }
+    });
 
     BaseEntity.prototype.$getUrl = function() {
         if (this.urlContext) {
             return this.urlContext.$getUrl() + this.url + '/' + this.$pk;
         } else {
-            return this.url;
+            return this.url + '/' + this.$pk;
         }
     }
 
     BaseEntity.prototype.$decodeAndPopulate = function(data) {
-
-        var hadPk = (typeof this.$pk === 'undefined')
 
         for (key in data) {
             if (this.fields[key]) {
@@ -177,10 +216,6 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         }
 
         var hasPk = (typeof this.$pk === 'undefined');
-
-        if (!hadPk && hasPk) {
-            this.$created();
-        }
     }
 
     BaseEntity.prototype.$encode = function() {
@@ -198,124 +233,153 @@ angular.module('datamodel').factory('Model', function($http,$q) {
     }
 
     /**
-     * Create a new Entity type.
-     *
-     * @param EntityName name of the entity.
-     * @param config     an entity definition object. (see doc)
-     * @param resolve    If true, will try to resolve relationTo and
-     *                   relationToMany that are configured using strings.
-     */
+    * Create a new Entity type.
+    *
+    * @param EntityName name of the entity.
+    * @param config     an entity definition object. (see doc)
+    * @param resolve    If true, will try to resolve relationTo and
+    *                   relationToMany that are configured using strings.
+    */
     Model.prototype.createEntityType = function(EntityName,
-                                                config,
-                                                resolveRelations = true) {
+        config,
+        resolveRelations = true) {
 
-        Entity.prototype = new BaseEntity(config);
+            Entity.prototype = new BaseEntity(config);
 
-        function Entity() {
+            function Entity() {
 
-            for (fieldname in this.fields) {
-                var field = this.fields[fieldname];
+                for (fieldname in this.fields) {
+                    var field = this.fields[fieldname];
 
-                if (field.relationTo) {
-                    this[fieldname] = field.relationTo;
-                } else if (field.relationToMany) {
-                    this[fieldname] = new Collection(field.relationTo, {
-                        url: field.url || fieldname || field.relationTo.url,
-                        entityContext: this
-                    });
-                }
-            }
-
-        }
-
-        angular.extend(Entity.prototype, config.instance);
-
-        angular.extend(Entity, config.static);
-
-        Entity.constructor = Entity;
-
-        Entity.model = this;
-
-        Entity.all = new Collection(Entity, {
-            url: config.url
-        });
-
-        Entity.all.model = this;
-
-        /**
-         * Fetch an instance with this primary key.
-         * An empty instance is returned is none is in the cache,
-         * if one it, that one is returned.
-         *
-         * Call $loadUnlessLoaded on the returned instance to ensure
-         * that it is loaded.
-         */
-        Entity.$getInstanceByPk = function(pk) {
-            var instance = this.instances[pk];
-            if (! instance) {
-                instance = new Entity();
-                instance.$pk = pk;
-                this.instances[pk] = instance;
-            }
-            return instance;
-        }
-
-        this.entities[EntityName] = Entity;
-
-        if (resolveRelations) {
-            this.resolveRelations();
-        }
-
-        return Entity;
-    }
-    /*
-     * Iterate through all the entities and look for fields
-     * with relationTo and relationToMany that are not entities,
-     * and try to assign an entity to them.
-     */
-    Model.prototype.resolveRelations = function() {
-        var changes;
-
-        do {
-            changes = false;
-
-            for (entityname in this.entities) {
-                var entity = this.entities[entityname];
-
-                for (fieldname in entity.fields) {
-                    var relationTo = entity.fields[fieldname].relationTo;
-                    if (relationTo &&
-                        ! (relationTo instanceof BaseEntity) &&
-                        this.entities[relationTo] instanceof BaseEntity) {
-
-                        entity.fields[fieldname].relationTo = this.entities[relationTo];
-                        changes = true;
-
-                    }
-                    var relationToMany = entity.fields[fieldname].relationToMany;
-                    if (relationToMany &&
-                        ! (relationToMany instanceof BaseEntity) &&
-                        this.entities[relationToMany] instanceof BaseEntity) {
-
-                        entity.fields[fieldname].relationToMany = this.entities[relationToMany];
-                        changes = true;
+                    if (field.relationTo) {
+                        this[fieldname] = field.relationTo;
+                    } else if (field.relationToMany) {
+                        this[fieldname] = new Collection(field.relationTo, {
+                            url: field.url || fieldname || field.relationTo.url,
+                            entityContext: this
+                        });
                     }
                 }
             }
 
-        } while (changes > 0);
-    }
+            Object.defineProperty(Entity.prototype,
+                                  config.pkField || 'id',
+                                  {
+                get: function() {
+                    return this.$pk;
+                },
+                set: function(newVal) {
+                    this.$pk = newVal;
+                }
+            });
 
-    Model.prototype.getFullUrl = function(localUrl){
-        var fullUrl = this.urlPrefix + localUrl;
+            Entity.pkField = config.pkField || 'id';
 
-        if (this.appendTrailingSlash && !fullUrl.endsWith('/')) {
-            fullUrl += '/';
+            angular.extend(Entity.prototype, config.instance);
+
+            angular.extend(Entity, config.static);
+
+            Entity.constructor = Entity;
+
+            Entity.model = this;
+
+            Entity.all = new Collection(Entity, {
+                url: config.url
+            });
+
+            Entity.all.model = this;
+
+            Entity.instances = {};
+            Entity.url = config.url || '';
+            Entity.fields = config.fields || {};
+
+            Entity.get = function(pk) {
+                return this.getInstanceByPk(pk).$loadUnlessLoaded();
+            }
+
+            // Make the properties of Entity available on instances.
+            // This is similar to how static class members are available
+            // to all instances in languages like Java or C++
+            angular.extend(Entity.prototype, Entity);
+
+            /**
+            * Fetch an instance with this primary key.
+            * An empty instance is returned is none is in the cache,
+            * if one it, that one is returned.
+            *
+            * Call $loadUnlessLoaded on the returned instance to ensure
+            * that it is loaded.
+            */
+            Entity.getInstanceByPk = function(pk) {
+
+                var instance = this.instances[pk];
+                if (! instance) {
+                    instance = new Entity();
+                    instance.$pk = pk;
+                    this.instances[pk] = instance;
+                    console.log('Miss: ' + pk);
+                } else {
+                    console.log('Hit: ' + pk);
+                }
+                return instance;
+            }
+
+            this.entities[EntityName] = Entity;
+
+            if (resolveRelations) {
+                this.resolveRelations();
+            }
+
+            return Entity;
         }
+        /*
+        * Iterate through all the entities and look for fields
+        * with relationTo and relationToMany that are not entities,
+        * and try to assign an entity to them.
+        */
+        Model.prototype.resolveRelations = function() {
+            var changes;
 
-        return fullUrl;
-    }
+            do {
+                changes = false;
 
-    return Model;
+                for (entityname in this.entities) {
+                    var entity = this.entities[entityname];
 
-});
+                    for (fieldname in entity.fields) {
+                        var relationTo = entity.fields[fieldname].relationTo;
+                        if (relationTo &&
+                            ! (relationTo instanceof BaseEntity) &&
+                            this.entities[relationTo] instanceof BaseEntity) {
+
+                                entity.fields[fieldname].relationTo = this.entities[relationTo];
+                                changes = true;
+
+                            }
+                            var relationToMany = entity.fields[fieldname].relationToMany;
+                            if (relationToMany &&
+                                ! (relationToMany instanceof BaseEntity) &&
+                                this.entities[relationToMany] instanceof BaseEntity) {
+
+                                    entity.fields[fieldname].relationToMany = this.entities[relationToMany];
+                                    changes = true;
+                                }
+                            }
+                        }
+
+                    } while (changes > 0);
+                }
+
+                Model.prototype.getFullUrl = function(localUrl){
+                    var fullUrl = this.urlPrefix + localUrl;
+
+                    if (this.appendTrailingSlash && !fullUrl.endsWith('/')) {
+                        fullUrl += '/';
+                    }
+
+                    return fullUrl;
+                }
+
+                return Model;
+
+            });
