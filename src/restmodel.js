@@ -61,7 +61,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
                 if (response.data) {
                     // Response data is assumed to be an updated version of
                     // the object, decode and patch it.
-                    $loaded = true;
+                    this.$loaded = true;
                     thisResource.$decodeAndPopulate(response.data);
                 }
             }, function(errors) {
