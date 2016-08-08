@@ -3,40 +3,6 @@ angular.module('datamodel',[]);
 
 angular.module('datamodel').factory('Model', function($http,$q) {
 
-    // Define the Model up here since CommonApi depends on it.
-    function Model(config) {
-        this.urlPrefix = config.urlPrefix;
-        this.appendTrailingSlash = !!config.appendTrailingSlash;
-        this.entities = {};
-        this.unresolvedRelations = {};
-    }
-
-    Model.prototype.registerUnresolvedRelation = function(field, on, fieldName) {
-        var entName = field.relationTo || field.relationToMany;
-        if (!this.unresolvedRelations[entName]) {
-            this.unresolvedRelations[entName] = [];
-        }
-        this.unresolvedRelations[entName].push({
-            field: field,
-            on: this,
-            fieldName: fieldname
-        });
-    }
-
-    Model.prototype.createCollection = function(entity, config) {
-        var collection = new Collection(entity, config);
-        collection.model = this;
-        return collection;
-    }
-
-    Model.prototype.exposeEntity = function(entName) {
-        var ent = this.entities[entName];
-        if (!ent) {
-            throw "Unknown entity with name " + entName;
-        }
-        return ent;
-    }
-
     /////////////////
     /// CommonApi ///
     /////////////////
@@ -269,6 +235,18 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         return data;
     }
 
+    /////////////
+    /// Model ///
+    /////////////
+
+    // Define the Model up here since CommonApi depends on it.
+    function Model(config) {
+        this.urlPrefix = config.urlPrefix;
+        this.appendTrailingSlash = !!config.appendTrailingSlash;
+        this.entities = {};
+        this.unresolvedRelations = {};
+    }
+
     /**
     * Create a new Entity type.
     *
@@ -390,6 +368,32 @@ angular.module('datamodel').factory('Model', function($http,$q) {
             // Resolved!
             delete unresolvedRelations[EntityName];
         }
+    }
+
+    Model.prototype.registerUnresolvedRelation = function(field, on, fieldName) {
+        var entName = field.relationTo || field.relationToMany;
+        if (!this.unresolvedRelations[entName]) {
+            this.unresolvedRelations[entName] = [];
+        }
+        this.unresolvedRelations[entName].push({
+            field: field,
+            on: this,
+            fieldName: fieldname
+        });
+    }
+
+    Model.prototype.createCollection = function(entity, config) {
+        var collection = new Collection(entity, config);
+        collection.model = this;
+        return collection;
+    }
+
+    Model.prototype.exposeEntity = function(entName) {
+        var ent = this.entities[entName];
+        if (!ent) {
+            throw "Unknown entity with name " + entName;
+        }
+        return ent;
     }
 
     /**
