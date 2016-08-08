@@ -8,7 +8,38 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         this.urlPrefix = config.urlPrefix;
         this.appendTrailingSlash = !!config.appendTrailingSlash;
         this.entities = {};
+        this.unresolvedRelations = {};
     }
+
+    Model.prototype.registerUnresolvedRelation = function(field, on, fieldName) {
+        var entName = field.relationTo || field.relationToMany;
+        if (!this.unresolvedRelations[entName]) {
+            this.unresolvedRelations[entName] = [];
+        }
+        this.unresolvedRelations[entName].push({
+            field: field,
+            on: this,
+            fieldName: fieldname
+        });
+    }
+
+    Model.prototype.createCollection = function(entity, config) {
+        var collection = new Collection(entity, config);
+        collection.model = this;
+        return collection;
+    }
+
+    Model.prototype.exposeEntity = function(entName) {
+        var ent = this.entities[entName];
+        if (!ent) {
+            throw "Unknown entity with name " + entName;
+        }
+        return ent;
+    }
+
+    /////////////////
+    /// CommonApi ///
+    /////////////////
 
     var CommonApi = {
 
@@ -173,6 +204,10 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         this.length = 0;
     }
 
+    //////////////
+    /// Entity ///
+    //////////////
+
     function BaseEntity(config) { }
 
     angular.extend(BaseEntity.prototype, CommonApi);
@@ -201,16 +236,18 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         if (this.urlContext) {
             return this.urlContext.$getUrl() + this.url + '/' + this.$pk;
         } else {
-            return this.url + '/' + this.$pk;
+            return this.url + '/' + this.$pk + '/';
         }
     }
 
     BaseEntity.prototype.$decodeAndPopulate = function(data) {
 
         for (key in data) {
-            if (this.fields[key]) {
+            if (this.fields[key] && this.fields[key].decode) {
                 this[key] = this.fields[key].decode(data[key]);
-            } else {
+            } else if (this[key] && this[key].$decodeAndPopulate) {
+                this[key].$decodeAndPopulate(data[key]);
+            }else {
                 this[key] = data[key];
             }
         }
@@ -240,146 +277,140 @@ angular.module('datamodel').factory('Model', function($http,$q) {
     * @param resolve    If true, will try to resolve relationTo and
     *                   relationToMany that are configured using strings.
     */
-    Model.prototype.createEntityType = function(EntityName,
-        config,
-        resolveRelations = true) {
+    Model.prototype.createEntityType = function(EntityName, config) {
 
-            Entity.prototype = new BaseEntity(config);
+        console.log(EntityName);
 
-            function Entity() {
+        var model = this;
 
-                for (fieldname in this.fields) {
-                    var field = this.fields[fieldname];
+        Entity.prototype = new BaseEntity(config);
 
-                    if (field.relationTo) {
-                        this[fieldname] = field.relationTo;
-                    } else if (field.relationToMany) {
-                        this[fieldname] = new Collection(field.relationTo, {
-                            url: field.url || fieldname || field.relationTo.url,
-                            entityContext: this
-                        });
-                    }
-                }
-            }
+        function Entity() {
 
-            Object.defineProperty(Entity.prototype,
-                                  config.pkField || 'id',
-                                  {
-                get: function() {
-                    return this.$pk;
-                },
-                set: function(newVal) {
-                    this.$pk = newVal;
-                }
-            });
+            for (fieldname in this.fields) {
+                var field = this.fields[fieldname];
 
-            Entity.pkField = config.pkField || 'id';
+                if (field.relationTo || field.relationToMany) {
 
-            angular.extend(Entity.prototype, config.instance);
+                    var specified = (field.relationTo || field.relationToMany);
 
-            angular.extend(Entity, config.static);
+                    var resolved = (specified instanceof BaseEntity) ?
+                    specified : model.entities[specified];
 
-            Entity.constructor = Entity;
-
-            Entity.model = this;
-
-            Entity.all = new Collection(Entity, {
-                url: config.url
-            });
-
-            Entity.all.model = this;
-
-            Entity.instances = {};
-            Entity.url = config.url || '';
-            Entity.fields = config.fields || {};
-
-            Entity.get = function(pk) {
-                return this.getInstanceByPk(pk).$loadUnlessLoaded();
-            }
-
-            // Make the properties of Entity available on instances.
-            // This is similar to how static class members are available
-            // to all instances in languages like Java or C++
-            angular.extend(Entity.prototype, Entity);
-
-            /**
-            * Fetch an instance with this primary key.
-            * An empty instance is returned is none is in the cache,
-            * if one it, that one is returned.
-            *
-            * Call $loadUnlessLoaded on the returned instance to ensure
-            * that it is loaded.
-            */
-            Entity.getInstanceByPk = function(pk) {
-
-                var instance = this.instances[pk];
-                if (! instance) {
-                    instance = new Entity();
-                    instance.$pk = pk;
-                    this.instances[pk] = instance;
-                    console.log('Miss: ' + pk);
-                } else {
-                    console.log('Hit: ' + pk);
-                }
-                return instance;
-            }
-
-            this.entities[EntityName] = Entity;
-
-            if (resolveRelations) {
-                this.resolveRelations();
-            }
-
-            return Entity;
-        }
-        /*
-        * Iterate through all the entities and look for fields
-        * with relationTo and relationToMany that are not entities,
-        * and try to assign an entity to them.
-        */
-        Model.prototype.resolveRelations = function() {
-            var changes;
-
-            do {
-                changes = false;
-
-                for (entityname in this.entities) {
-                    var entity = this.entities[entityname];
-
-                    for (fieldname in entity.fields) {
-                        var relationTo = entity.fields[fieldname].relationTo;
-                        if (relationTo &&
-                            ! (relationTo instanceof BaseEntity) &&
-                            this.entities[relationTo] instanceof BaseEntity) {
-
-                                entity.fields[fieldname].relationTo = this.entities[relationTo];
-                                changes = true;
-
-                            }
-                            var relationToMany = entity.fields[fieldname].relationToMany;
-                            if (relationToMany &&
-                                ! (relationToMany instanceof BaseEntity) &&
-                                this.entities[relationToMany] instanceof BaseEntity) {
-
-                                    entity.fields[fieldname].relationToMany = this.entities[relationToMany];
-                                    changes = true;
-                                }
-                            }
+                    if (resolved) {
+                        if (field.relationTo) {
+                            this[fieldname] = resolved;
+                        } else {
+                            this[fieldname] = model.createCollection(resolved, {
+                                url: field.url || fieldname || field.relationToMany.url,
+                                urlContext: this
+                            });
                         }
-
-                    } while (changes > 0);
-                }
-
-                Model.prototype.getFullUrl = function(localUrl){
-                    var fullUrl = this.urlPrefix + localUrl;
-
-                    if (this.appendTrailingSlash && !fullUrl.endsWith('/')) {
-                        fullUrl += '/';
+                    } else {
+                        model.registerUnresolvedRelation(field, this, fieldname);
                     }
-
-                    return fullUrl;
                 }
 
-                return Model;
+            }
+        }
 
-            });
+        Object.defineProperty(Entity.prototype, config.pkField || 'id', {
+            get: function() {
+                return this.$pk;
+            },
+            set: function(newVal) {
+                this.$pk = newVal;
+            }
+        });
+
+        Entity.pkField = config.pkField || 'id';
+
+        angular.extend(Entity.prototype, config.instance);
+
+        angular.extend(Entity, config.static);
+
+        Entity.constructor = Entity;
+
+        Entity.model = this;
+
+        Entity.all = model.createCollection(Entity, {
+            url: config.url
+        });
+
+        Entity.all.model = this;
+
+        Entity.instances = {};
+        Entity.url = config.url || '';
+        Entity.fields = config.fields || {};
+
+        Entity.get = function(pk) {
+            return this.getInstanceByPk(pk).$loadUnlessLoaded();
+        }
+
+        // Make the properties of Entity available on instances.
+        // This is similar to how static class members are available
+        // to all instances in languages like Java or C++
+        angular.extend(Entity.prototype, Entity);
+
+        /**
+        * Fetch an instance with this primary key.
+        * An empty instance is returned is none is in the cache,
+        * if one it, that one is returned.
+        *
+        * Call $loadUnlessLoaded on the returned instance to ensure
+        * that it is loaded.
+        */
+        Entity.getInstanceByPk = function(pk) {
+            // Check in the instances if there is one with that pk
+            var instance = this.instances[pk];
+            if (! instance) {
+                // It doesn't exist, create one and assign it a the pk
+                instance = new Entity();
+                instance.$pk = pk; // Adds it automatically to instances
+            }
+            return instance;
+        }
+
+        // Store it as part of the model
+        model.entities[EntityName] = Entity;
+
+        // Check if there were unresolved relations on previous entries that refer to this entity.
+        if (model.unresolvedRelations[EntityName]) {
+            // Iterate over all entries
+            for (entry of model.unresolvedRelations[EntityName]){
+                if (entry.field.relationTo) { // Was it a to-one relation?
+                    entry.on[entry.fieldName] = Entity;
+                } else { // Or a to-many relation?
+                    entry.on[entry.fieldName] = model.createCollection(Entity, {
+                        url: entry.field.url || entry.fieldName || entry.field.url,
+                        urlContext: this
+                    });
+                }
+            }
+            // Resolved!
+            delete unresolvedRelations[EntityName];
+        }
+    }
+
+    /**
+    * Translate a local url into an absolute url.
+    *
+    * For example, transform '/houses/1'
+    * into 'http://api.example.com/houses/1/'
+    *
+    * @param  {string} localUrl The local url
+    * @return {string}          The resulting full url.
+    */
+    Model.prototype.getFullUrl = function(localUrl){
+        var fullUrl = this.urlPrefix + localUrl;
+
+        if (this.appendTrailingSlash && !fullUrl.endsWith('/')) {
+            fullUrl += '/';
+        }
+
+        return fullUrl;
+    }
+
+    return Model;
+
+});
