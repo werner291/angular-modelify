@@ -225,7 +225,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         var data = {};
         for (key in this) {
             if (! key.startsWith("$")) {
-                if (this.fields[key] && this.type.$fields[key].encode) {
+                if (this.fields[key] && this.fields[key].encode) {
                     data[key] = this.fields[key].encode(this[key]);
                 } else {
                     data[key] = data[key];
