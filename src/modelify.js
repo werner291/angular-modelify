@@ -206,6 +206,20 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         }
     }
 
+    /**
+     * Essentially the inverse of $encode.
+     *
+     * The data is taken from the data parameter, decoded, and patched into
+     * this object, overwriting any existing properties.
+     *
+     * To get a new object, simply call EntityName.getInstanceByPk, and then call $decode
+     * on it. If there is no private key, call new EntityName.
+     *
+     * $decode also updates the object cache.
+     *
+     * @param  {[type]} data [description]
+     * @return {[type]}      [description]
+     */
     BaseEntity.prototype.$decodeAndPopulate = function(data) {
 
         for (key in data) {
@@ -221,6 +235,12 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         var hasPk = (typeof this.$pk === 'undefined');
     }
 
+    /**
+     * Get a $http-friedly object from te instance.
+     * The result of $encode is directly passed to $http(config) as config.data.
+     *
+     * @return {[type]} [description]
+     */
     BaseEntity.prototype.$encode = function() {
         var data = {};
         for (key in this) {
@@ -233,6 +253,14 @@ angular.module('datamodel').factory('Model', function($http,$q) {
             }
         }
         return data;
+    }
+
+    BaseEntity.prototype.$save = function() {
+        if (this.$pk) {
+            return this.$put();
+        } else {
+            return this.$post();
+        }
     }
 
     /////////////
@@ -287,6 +315,10 @@ angular.module('datamodel').factory('Model', function($http,$q) {
                     }
                 }
 
+            }
+
+            if (config.instance) {
+                angular.extend(this, config.instance);
             }
         }
 
