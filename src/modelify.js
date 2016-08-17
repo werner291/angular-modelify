@@ -80,7 +80,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
                 return thisResource;
             }, function(errors) {
                 // Non-success.
-                throw "Problems: " + errors;
+                console.error(errors);
             });
         },
 
@@ -99,13 +99,13 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         },
 
         $post: function() {
-            this.$restAction({
+            return this.$restAction({
                 method: 'POST'
             });
         },
 
         $put: function() {
-            this.$restAction({
+            return this.$restAction({
                 method: 'PUT'
             });
         },
@@ -118,6 +118,14 @@ angular.module('datamodel').factory('Model', function($http,$q) {
 
     }
 
+    /**
+     * A Collection is a special type of Array representing a collection
+     * of Entity instances. It can also be used to represent a to-many
+     * relation
+     *
+     * @param {[type]} type   [description]
+     * @param {[type]} config [description]
+     */
     function Collection(type, config) {
         this.type = type;
         this.url = config.url;
@@ -146,9 +154,10 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         this.$clear();
 
         if (this.$encodedAsPks) {
-            for (pk in data) {
-                this.push(type.getInstanceByPk(pk));
-            }
+            var self = this;
+            angular.forEach(data, function(pk) {
+                self.push(type.getInstanceByPk(pk));
+            });
         } else {
             for (const entData of data) {
 
@@ -164,6 +173,31 @@ angular.module('datamodel').factory('Model', function($http,$q) {
                 this.push(instance);
             }
         }
+    }
+
+    /**
+     * Get a JSON-safe representation.
+     *
+     * If $encodedAsPks is true, an array containing the primary keys
+     * of the objects is returned. If it is falsy (default), an array
+     * is returned containing the $encode-d instances.
+     *
+     * @return {array} The JSON-safe encoded collection.
+     */
+    Collection.prototype.$encode = function () {
+        if (! this.$loaded) {
+            throw 'Attempting to $encode a Collection that is not loaded.';
+        }
+
+        var coll = this;
+
+        var encoded = [];
+
+        angular.forEach(coll, function(instance) {
+            encoded.push(this.$encodedAsPks ? instance.$pk : instance.$encode());
+        });
+
+        return encoded;
     }
 
     Collection.prototype.$clear = function() {
@@ -222,15 +256,16 @@ angular.module('datamodel').factory('Model', function($http,$q) {
      */
     BaseEntity.prototype.$decodeAndPopulate = function(data) {
 
-        for (key in data) {
-            if (this.fields[key] && this.fields[key].decode) {
-                this[key] = this.fields[key].decode(data[key]);
-            } else if (this[key] && this[key].$decodeAndPopulate) {
-                this[key].$decodeAndPopulate(data[key]);
-            }else {
-                this[key] = data[key];
+        var self = this;
+        angular.forEach(data, function(value,key) {
+            if (self.fields[key] && self.fields[key].decode) {
+                self[key] = self.fields[key].decode(data[key]);
+            } else if (this[key] && self[key].$decodeAndPopulate) {
+                self[key].$decodeAndPopulate(data[key]);
+            } else {
+                self[key] = data[key];
             }
-        }
+        });
 
         var hasPk = (typeof this.$pk === 'undefined');
     }
@@ -243,15 +278,19 @@ angular.module('datamodel').factory('Model', function($http,$q) {
      */
     BaseEntity.prototype.$encode = function() {
         var data = {};
-        for (key in this) {
-            if (! key.startsWith("$")) {
-                if (this.fields[key] && this.fields[key].encode) {
-                    data[key] = this.fields[key].encode(this[key]);
+        var self = this;
+        angular.forEach(this, function(value,key) {
+            if (! key.startsWith("$") &&
+                ! (value.$loaded === false)) {
+                if (self.fields[key] && self.fields[key].encode) {
+                    data[key] = self.fields[key].encode(self[key]);
+                } else if (value.$encode){
+                    data[key] = value.$encode();
                 } else {
-                    data[key] = data[key];
+                    data[key] = value;
                 }
             }
-        }
+        });
         return data;
     }
 
@@ -272,6 +311,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         this.urlPrefix = config.urlPrefix;
         this.appendTrailingSlash = !!config.appendTrailingSlash;
         this.entities = {};
+        this.fields = config.fields || {};
         this.unresolvedRelations = {};
     }
 
