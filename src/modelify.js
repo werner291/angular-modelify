@@ -1,4 +1,8 @@
 
+function isInt(n){
+    return Number(n) === n && n % 1 === 0;
+}
+
 angular.module('datamodel',[]);
 
 angular.module('datamodel').factory('Model', function($http,$q) {
@@ -246,9 +250,6 @@ angular.module('datamodel').factory('Model', function($http,$q) {
      * The data is taken from the data parameter, decoded, and patched into
      * this object, overwriting any existing properties.
      *
-     * To get a new object, simply call EntityName.getInstanceByPk, and then call $decode
-     * on it. If there is no private key, call new EntityName.
-     *
      * $decode also updates the object cache.
      *
      * @param  {[type]} data [description]
@@ -257,12 +258,22 @@ angular.module('datamodel').factory('Model', function($http,$q) {
     BaseEntity.prototype.$decodeAndPopulate = function(data) {
 
         var self = this;
+
+        // Iterate over all key/value entries in the data
         angular.forEach(data, function(value,key) {
+
             if (self.fields[key] && self.fields[key].decode) {
+                // If we have a field specification with a custom decode function, use that
                 self[key] = self.fields[key].decode(data[key]);
+            } else if (self.fields[key] && self.fields[key].relationTo.prototype instanceof BaseEntity && isInt(value)) {
+                // If this a primary key referring to some other entity,
+                // set the member to that entity, possibly unloaded
+                self[key] = new self.fields[key].relationTo.getInstanceByPk(value)
             } else if (this[key] && self[key].$decodeAndPopulate) {
+                // If the field value has a $decodeAndPopulate method, use that
                 self[key].$decodeAndPopulate(data[key]);
             } else {
+                // Else, simply assign the data
                 self[key] = data[key];
             }
         });
@@ -327,38 +338,75 @@ angular.module('datamodel').factory('Model', function($http,$q) {
 
         var model = this;
 
-        Entity.prototype = new BaseEntity(config);
-
+        // Create a function to serve as a constructor for entity instances
         function Entity() {
 
-            for (fieldname in this.fields) {
-                var field = this.fields[fieldname];
+            // Iterate over the fields to inisitalize the instance members
+            for (var fieldName in this.fields) {
+                var field = this.fields[fieldName];
 
-                if (field.relationTo || field.relationToMany) {
+                if (field.relationTo || field.relationToMany) { // This is a relation field
 
                     var specified = (field.relationTo || field.relationToMany);
 
-                    var resolved = (specified instanceof BaseEntity) ?
-                    specified : model.entities[specified];
+                    // Get the entitiy specified, if it has already been defined
+                    var resolved = (specified.prototype instanceof BaseEntity) ?
+                        specified : model.entities[specified];
 
-                    if (resolved) {
-                        if (field.relationTo) {
-                            this[fieldname] = resolved;
-                        } else {
-                            this[fieldname] = model.createCollection(resolved, {
-                                url: field.url || fieldname || field.relationToMany.url,
-                                urlContext: this
-                            });
-                        }
+                    if (!resolved) {
+                        // This is still a string relation, there is something wrong with the model
+                        throw "Unresolved relation at instantiation";
+                    }
+
+                    if (field.relationTo) {
+                        // Relation to single, initialize to null
+                        this[fieldName] = null;
                     } else {
-                        model.registerUnresolvedRelation(field, this, fieldname);
+                        // Relation to many, initialize as empty collection
+                        this[fieldName] = model.createCollection(resolved, {
+                            url: field.url || fieldName || field.relationToMany.url,
+                            urlContext: this
+                        });
                     }
                 }
 
             }
 
+            // Copy the instance variables specified in the config into the instance.
+            // (TODO should use prototype for this?)
             if (config.instance) {
                 angular.extend(this, config.instance);
+            }
+        }
+
+        // Assign a new BaseEntity with the specified configuration to serve as the entity's prototype
+        Entity.prototype = new BaseEntity(config);
+
+        // Check for any fields that are a relationTo or a relationToMany
+        // that are strings rather than entities
+        for (fieldname in config.fields) {
+            var field = config.fields[fieldname];
+
+            if (field.relationTo || field.relationToMany) { // This is a relation to some other entity
+
+                var specified = (field.relationTo || field.relationToMany);
+
+                if (! (specified.prototype instanceof BaseEntity)) {
+                    // Not a direct reference: resolve string relation
+                    var resolved = model.entities[specified];
+
+                    if (resolved) {
+                        // Replace string with actual entity ref
+                        if (field.relationTo) {
+                            field.relationTo = resolved;
+                        } else {
+                            field.relationToMany = resolved;
+                        }
+                    } else {
+                        // Register unresolved
+                        model.registerUnresolvedRelation(field, Entity, fieldname);
+                    }
+                }
             }
         }
 
@@ -392,7 +440,11 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         Entity.fields = config.fields || {};
 
         Entity.get = function(pk) {
-            return this.getInstanceByPk(pk).$loadUnlessLoaded();
+            ent = this.getInstanceByPk(pk);
+
+            ent.$loadUnlessLoaded();
+
+            return ent;
         }
 
         // Make the properties of Entity available on instances.
@@ -410,7 +462,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         */
         Entity.getInstanceByPk = function(pk) {
             // Check in the instances if there is one with that pk
-            var instance = this.instances[pk];
+            var instance = Entity.instances[pk];
             if (! instance) {
                 // It doesn't exist, create one and assign it a the pk
                 instance = new Entity();
@@ -427,8 +479,10 @@ angular.module('datamodel').factory('Model', function($http,$q) {
             // Iterate over all entries
             for (entry of model.unresolvedRelations[EntityName]){
                 if (entry.field.relationTo) { // Was it a to-one relation?
-                    entry.on[entry.fieldName] = Entity;
+                    entry.field.relationTo = Entity; // Replace the string reference with an actual object
+                    entry.on[entry.fieldName] = null;
                 } else { // Or a to-many relation?
+                    // Create a collection
                     entry.on[entry.fieldName] = model.createCollection(Entity, {
                         url: entry.field.url || entry.fieldName || entry.field.url,
                         urlContext: this
@@ -436,7 +490,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
                 }
             }
             // Resolved!
-            delete unresolvedRelations[EntityName];
+            delete model.unresolvedRelations[EntityName];
         }
     }
 
@@ -447,7 +501,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         }
         this.unresolvedRelations[entName].push({
             field: field,
-            on: this,
+            on: on,
             fieldName: fieldname
         });
     }
