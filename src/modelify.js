@@ -78,7 +78,6 @@ angular.module('datamodel').factory('Model', function($http,$q) {
                 if (response.data) {
                     // Response data is assumed to be an updated version of
                     // the object, decode and patch it.
-                    this.$loaded = true;
                     thisResource.$decodeAndPopulate(response.data);
                 }
                 return thisResource;
@@ -135,7 +134,7 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         this.url = config.url;
         this.$loaded = false;
         this.encodedAsPks = config.$encodedAsPks;
-        this.urlContext = config.urlContext;
+        this.$urlContext = config.urlContext;
     }
 
     Collection.prototype = new Array();
@@ -143,14 +142,15 @@ angular.module('datamodel').factory('Model', function($http,$q) {
     angular.extend(Collection.prototype, CommonApi);
 
     Collection.prototype.$getUrl = function() {
-        if (this.urlContext) {
-            return this.urlContext.$getUrl() + this.url;
+        if (this.$urlContext) {
+            return this.$urlContext.$getUrl() + this.url;
         } else {
             return this.url;
         }
     }
 
     Collection.prototype.$decodeAndPopulate = function(data) {
+        this.$loaded = true;
         if (! data instanceof Array) {
             throw "Expected data to be Array, got " + (typeof data);
         }
@@ -237,8 +237,8 @@ angular.module('datamodel').factory('Model', function($http,$q) {
     });
 
     BaseEntity.prototype.$getUrl = function() {
-        if (this.urlContext) {
-            return this.urlContext.$getUrl() + this.url + '/' + this.$pk;
+        if (this.$urlContext) {
+            return this.$urlContext.$getUrl() + this.url + '/' + this.$pk;
         } else {
             return this.url + '/' + this.$pk + '/';
         }
@@ -252,12 +252,16 @@ angular.module('datamodel').factory('Model', function($http,$q) {
      *
      * $decode also updates the object cache.
      *
+     * After this call, the instance is considered "loaded".
+     *
      * @param  {[type]} data [description]
      * @return {[type]}      [description]
      */
     BaseEntity.prototype.$decodeAndPopulate = function(data) {
 
         var self = this;
+
+        self.$loaded = true;
 
         // Iterate over all key/value entries in the data
         angular.forEach(data, function(value,key) {
@@ -293,13 +297,25 @@ angular.module('datamodel').factory('Model', function($http,$q) {
         var data = {};
         var self = this;
         angular.forEach(this, function(value,key) {
-            if (! key.startsWith("$") &&
-                ! (value.$loaded === false)) {
+            if (!key.startsWith("$") && (value === null || value.$loaded !== false)) {
+
                 if (self.fields[key] && self.fields[key].encode) {
+                    // If we have a field with a custon $encode method, use that
                     data[key] = self.fields[key].encode(self[key]);
-                } else if (value.$encode){
+                } else if (value && value.constructor.prototype instanceof BaseEntity) {
+                    // The value is an instance of an entity
+                    if (self.fields[key] && self.fields[key].encodeAsPk === false) {
+                        // Encode as a whole instance
+                        data[key] = value.$encode();
+                    } else {
+                        // Encode only as primary key
+                        data[key] = value.$pk;
+                    }
+                } else if (value && value instanceof Collection){
+                    // The value is a collection (to-many relation)
                     data[key] = value.$encode();
                 } else {
+                    // Just assign it, assume that it can be encoded
                     data[key] = value;
                 }
             }
