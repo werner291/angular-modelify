@@ -265,11 +265,13 @@ angular.module('datamodel').factory('Model', function($http,$q) {
             if (self.fields[key] && self.fields[key].decode) {
                 // If we have a field specification with a custom decode function, use that
                 self[key] = self.fields[key].decode(data[key]);
-            } else if (self.fields[key] && self.fields[key].relationTo.prototype instanceof BaseEntity && isInt(value)) {
+            } else if (self.fields[key] && self.fields[key].relationTo &&
+                       self.fields[key].relationTo.prototype instanceof BaseEntity
+                       && isInt(value)) {
                 // If this a primary key referring to some other entity,
                 // set the member to that entity, possibly unloaded
                 self[key] = new self.fields[key].relationTo.getInstanceByPk(value)
-            } else if (this[key] && self[key].$decodeAndPopulate) {
+            } else if (self[key] && self[key].$decodeAndPopulate) {
                 // If the field value has a $decodeAndPopulate method, use that
                 self[key].$decodeAndPopulate(data[key]);
             } else {
